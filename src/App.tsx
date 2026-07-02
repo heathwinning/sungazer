@@ -264,6 +264,24 @@ export default function App() {
     });
   }, [allSunDataBase, locations]);
 
+  // Compute the global minimum elevation across all hours (0–23.5) and all days.
+  // Used by the Elevation chart for a fixed lower Y-axis bound that never changes
+  // while the user slides the time-of-day slider.
+  const globalElevationMin = useMemo(() => {
+    let min = Infinity;
+    for (const locCache of allSunDataCache) {
+      for (const dayRows of locCache) {
+        if (!Array.isArray(dayRows)) continue;
+        for (const entry of dayRows) {
+          if (entry && isFinite(entry.elevation)) {
+            min = Math.min(min, entry.elevation);
+          }
+        }
+      }
+    }
+    return isFinite(min) ? min : -90;
+  }, [allSunDataCache]);
+
   // Pick from precomputed cache — instant
   const allSunData: ChartLocation[] = useMemo(
     () => allSunDataBase.map((loc, li) => ({
@@ -484,7 +502,7 @@ export default function App() {
         <main className="flex-1 space-y-6 min-w-0">
           {/* Chart 1: Day Length */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <h2 className="text-lg font-semibold text-amber-400 flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -498,15 +516,15 @@ export default function App() {
 
           {/* Chart 2: Elevation */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-cyan-400 flex items-center gap-2 shrink-0">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                 </svg>
                 Sun Elevation
               </h2>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex rounded bg-slate-800 border border-slate-600 overflow-hidden">
                   <button
                     onClick={() => setElevationMode('max')}
@@ -566,12 +584,12 @@ export default function App() {
                 The sun may be below the horizon at {targetHour}:00 on some days.
               </p>
             )}
-            <ElevationChart locations={allSunData} mode={elevationMode} />
+            <ElevationChart locations={allSunData} mode={elevationMode} globalMinElevation={globalElevationMin} />
           </section>
 
           {/* Chart 3: Sunrise & Sunset Azimuth */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <h2 className="text-lg font-semibold text-purple-400 flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -579,7 +597,7 @@ export default function App() {
                 </svg>
                 Sunrise & Sunset Azimuth
               </h2>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-slate-500 shrink-0">
                 0°=N &middot; 90°=E &middot; 180°=S &middot; 270°=W
               </span>
             </div>
@@ -588,7 +606,7 @@ export default function App() {
 
           {/* Chart 4: Shadow Length Multiplier */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <h2 className="text-lg font-semibold text-orange-400 flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -597,14 +615,14 @@ export default function App() {
                 </svg>
                 Shadow Length Multiplier
               </h2>
-              <span className="text-xs text-slate-500">At solar noon &middot; 1m object → N× shadow</span>
+              <span className="text-xs text-slate-500 shrink-0">At solar noon &middot; 1m object → N× shadow</span>
             </div>
             <ShadowChart locations={allSunData} />
           </section>
 
           {/* Chart 5: Equation of Time */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <h2 className="text-lg font-semibold text-yellow-400 flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="10" strokeWidth="2" />
@@ -612,23 +630,23 @@ export default function App() {
                 </svg>
                 Equation of Time
               </h2>
-              <span className="text-xs text-slate-500">Solar noon − clock noon &middot; ±16 min range</span>
+              <span className="text-xs text-slate-500 shrink-0">Solar noon − clock noon &middot; ±16 min range</span>
             </div>
             <EquationOfTimeChart locations={allSunData} />
           </section>
 
           {/* Chart 6: Polar Sun Path */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-emerald-400 flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-emerald-400 flex items-center gap-2 shrink-0">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="9" strokeWidth="2" />
                   <circle cx="12" cy="12" r="3" strokeWidth="2" />
-                  <path strokeLinecap="round" strokeWidth="2" d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+                  <path strokeLinecap="round" strokeWidth={2} d="M12 3v3M12 18v3M3 12h3M18 12h3" />
                 </svg>
                 Sun Path (Polar)
               </h2>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -661,15 +679,15 @@ export default function App() {
 
           {/* Chart 7: Daylight Map */}
           <section className="bg-surface rounded-xl p-5 border border-slate-700/50">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-lg font-semibold text-amber-400 flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+              <h2 className="text-lg font-semibold text-amber-400 flex items-center gap-2 shrink-0">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 Daylight Map
               </h2>
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-slate-500">Day</span>
                   <input type="range" min={1} max={365} value={mapDay}

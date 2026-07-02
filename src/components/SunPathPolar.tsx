@@ -148,7 +148,7 @@ export default function SunPathPolar({ locations, annual }: Props) {
       },
       legend: {
         show: !annual,
-        top: 0,
+        top: 8,
         data: locations.map((l) => l.label),
       },
       series,

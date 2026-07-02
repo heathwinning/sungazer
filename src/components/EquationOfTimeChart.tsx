@@ -17,8 +17,8 @@ export default function EquationOfTimeChart({ locations, labelStep = 20 }: Props
     const labels = firstData.map((d) => d.label);
 
     return {
-      grid: { left: 56, right: 20, top: 40, bottom: 32 },
-      legend: { top: 0 },
+      grid: { left: 56, right: 20, top: 60, bottom: 32 },
+      legend: { top: 8 },
       tooltip: {
         trigger: 'axis' as const,
         valueFormatter: (v: number) => {

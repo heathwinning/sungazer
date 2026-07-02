@@ -17,8 +17,8 @@ export default function ShadowChart({ locations, labelStep = 20 }: Props) {
     const labels = firstData.map((d) => d.label);
 
     return {
-      grid: { left: 56, right: 20, top: 40, bottom: 32 },
-      legend: { top: 0 },
+      grid: { left: 56, right: 20, top: 60, bottom: 32 },
+      legend: { top: 8 },
       tooltip: {
         trigger: 'axis' as const,
         valueFormatter: (v: number) => (v != null ? `${v.toFixed(2)}×` : '—'),
@@ -30,7 +30,6 @@ export default function ShadowChart({ locations, labelStep = 20 }: Props) {
       },
       yAxis: {
         type: 'value' as const,
-        min: 0,
         name: 'Shadow ÷ Height',
         axisLabel: { formatter: (v: number) => `${v}×` },
       },

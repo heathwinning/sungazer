@@ -92,8 +92,8 @@ export default function DayLengthChart({ locations, labelStep = 20 }: Props) {
     }
 
     return {
-      grid: { left: 48, right: 56, top: 40, bottom: 32 },
-      legend: { top: 0 },
+      grid: { left: 48, right: 56, top: 70, bottom: 32 },
+      legend: { top: 8, type: 'scroll' as const },
       tooltip: {
         trigger: 'axis' as const,
         formatter: (params: any) => {
