@@ -15,6 +15,4 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
-.chart-container canvas {
-  max-height: 350px;
-}
+/* ECharts handles its own responsive sizing */

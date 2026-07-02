@@ -1,4 +1,6 @@
-import { useRef, useEffect } from 'react';
+import { useMemo, useRef } from 'react';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 import { CONTINENTS } from '../lib/worldOutlines';
 import { getSubsolarPoint } from '../lib/sunCalc';
 
@@ -14,247 +16,261 @@ interface Props {
   utcHour: number;
   markers?: MapMarker[];
   centerLng?: number;
-  centerLabel?: string;
 }
 
-const W = 720, H = 360, P = 30;
+// Three longitudinal copies of map outlines so panning to any longitude
+// always shows continent shapes. Fill strips use primary (0°) copy only.
+(function initWorldMap() {
+  const baseFeatures = CONTINENTS.map((c) => ({
+    type: 'Feature' as const,
+    properties: { name: c.name },
+    geometry: { type: 'Polygon' as const, coordinates: c.polygons },
+  }));
+  const shift = (f: typeof baseFeatures[number], o: number) => ({
+    ...f,
+    geometry: { ...f.geometry, coordinates: f.geometry.coordinates.map((r) => r.map(([lon, lat]) => [lon + o, lat])) },
+  });
+  echarts.registerMap('world', {
+    type: 'FeatureCollection',
+    features: [...baseFeatures.map((f) => shift(f, -360)), ...baseFeatures, ...baseFeatures.map((f) => shift(f, +360))],
+  } as any);
+})();
 
-function lonToX(lon: number): number { return P + ((lon + 180) / 360) * (W - 2 * P); }
-function latToY(lat: number): number { return P + ((90 - lat) / 180) * (H - 2 * P); }
+// --------------- helpers ---------------
 
-export default function DaylightMap({ dayOfYear, utcHour, markers, centerLng, centerLabel }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function solarDeclination(doy: number): number {
+  const B = ((doy - 1) * 2 * Math.PI) / 365;
+  return (0.006918 - 0.399912 * Math.cos(B) + 0.070257 * Math.sin(B) - 0.006758 * Math.cos(2 * B) + 0.000907 * Math.sin(2 * B) - 0.002697 * Math.cos(3 * B) + 0.00148 * Math.sin(3 * B)) * (180 / Math.PI);
+}
 
-  // Convert absolute longitude to view-relative [-180, 180).
-  // When centered, the target longitude maps to 0 and the far-side seam is at ±180.
-  const viewLng = (lon: number): number => {
-    let v = centerLng != null ? lon - centerLng : lon;
-    while (v >= 180) v -= 360;
-    while (v < -180) v += 360;
-    return v;
+function subsolarLng(utcHour: number): number {
+  return ((12 - utcHour) * 15 + 540) % 360 - 180;
+}
+
+// --------------- strip fill ---------------
+
+/** Build trapezoid strips covering the area where solar elevation > targetElev.
+ *  targetElev = 0 for daylight, -6 for civil twilight, -12 nautical, -18 astro.
+ *  Strips are clipped to [-180,180] so every vertex is in the registered map range. */
+function buildFillStrips(dayOfYear: number, utcHour: number, targetElev: number, step = 1): number[][][] {
+  const dec = solarDeclination(dayOfYear);
+  const sLng = subsolarLng(utcHour);
+  const decRad = (dec * Math.PI) / 180;
+  const targetRad = (targetElev * Math.PI) / 180;
+  const sinTarget = Math.sin(targetRad);
+  const strips: number[][][] = [];
+
+  // Helper: clip interval [sr, ss] (sr < ss, raw) into ≤2 pieces within [-180,180]
+  const clip = (sr: number, ss: number): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let k = -2; k <= 2; k++) {
+      const a = sr + 360 * k, b = ss + 360 * k;
+      const lo = Math.max(a, -180), hi = Math.min(b, 180);
+      if (lo < hi) out.push([lo, hi]);
+    }
+    return out;
   };
 
-  // Convert view-relative longitude back to absolute (for labels etc.)
-  const absLng = (vLon: number): number => {
-    let a = centerLng != null ? vLon + centerLng : vLon;
-    while (a >= 180) a -= 360;
-    while (a < -180) a += 360;
-    return a;
-  };
+  let prevLat: number | null = null;
+  let prevPieces: [number, number][] | null = null;
 
-  const centerKey = centerLng != null ? `${centerLng}:${centerLabel}` : '';
+  for (let lat = -90; lat <= 90; lat += step) {
+    const latRad = (lat * Math.PI) / 180;
+    const sinLat = Math.sin(latRad);
+    const cosLat = Math.cos(latRad);
 
-  useEffect(() => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    c.width = W * dpr; c.height = H * dpr;
-    c.style.width = W + 'px'; c.style.height = H + 'px';
-    ctx.scale(dpr, dpr);
+    // cos(ha) = (sin(target) - sin(lat)*sin(dec)) / (cos(lat)*cos(dec))
+    const denom = cosLat * Math.cos(decRad);
+    if (denom === 0) { prevLat = prevPieces = null; continue; }
+    const rhs = (sinTarget - sinLat * Math.sin(decRad)) / denom;
+    const clamped = Math.max(-1, Math.min(1, rhs));
 
-    const year = new Date().getFullYear();
-    const date = new Date(Date.UTC(year, 0, dayOfYear, Math.floor(utcHour),
-      Math.round((utcHour % 1) * 60), 0));
-    const sub = getSubsolarPoint(date);
-    const subLon = sub.lng;
-    const subLat = sub.lat;
-    const dec = (subLat * Math.PI) / 180;  // radians for trig below
-
-    // Fill entire map with opaque night, then punch out day band per row.
-    // All longitudes are converted to view-relative [-180, 180) so the
-    // "seam" is always at ±180° regardless of centering.
-    ctx.fillStyle = '#0a101e';
-    ctx.fillRect(P, P, W - 2 * P, H - 2 * P);
-
-    for (let lat = 90; lat >= -90; lat -= 0.5) {
-      const latRad = (lat * Math.PI) / 180;
-      const cosHA = -Math.tan(latRad) * Math.tan(dec);
-
-      let y1 = latToY(lat + 0.5);
-      let rowH = Math.max(0.5, latToY(lat - 0.5) - y1);
-      if (y1 < P) { rowH -= P - y1; y1 = P; }
-      if (y1 + rowH > H - P) rowH = (H - P) - y1;
-      if (rowH <= 0) continue;
-
-      if (cosHA > 1) continue;
-      if (cosHA < -1) {
-        ctx.fillStyle = '#0e6b9b';
-        ctx.fillRect(P, y1, W - 2 * P, rowH);
-        continue;
-      }
-
-      const ha = Math.acos(cosHA) * (180 / Math.PI);
-
-      // Day band in view-relative longitudes: [viewLng(subLon - ha), viewLng(subLon + ha)]
-      let dayA = viewLng(subLon - ha);
-      let dayB = viewLng(subLon + ha);
-
-      ctx.fillStyle = '#0e6b9b';
-
-      if (dayA <= dayB) {
-        const x = Math.max(P, lonToX(dayA));
-        const w = Math.min(W - P, lonToX(dayB)) - x;
-        if (w > 0) ctx.fillRect(x, y1, w, rowH);
-      } else {
-        const x1 = Math.max(P, lonToX(dayA));
-        const w1 = (W - P) - x1;
-        if (w1 > 0) ctx.fillRect(x1, y1, w1, rowH);
-        const w2 = Math.min(W - P, lonToX(dayB)) - P;
-        if (w2 > 0) ctx.fillRect(P, y1, w2, rowH);
-      }
-    }
-
-    // Grid: longitude lines every 30° in view-relative space.
-    // Labels show the absolute longitude.
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-    ctx.lineWidth = 0.5;
-    for (let vLon = -180; vLon <= 180; vLon += 30) {
-      const x = lonToX(vLon);
-      ctx.beginPath(); ctx.moveTo(x, P); ctx.lineTo(x, H - P); ctx.stroke();
-      const aLon = absLng(vLon);
-      const deg = Math.round(Math.abs(aLon));
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '9px system-ui'; ctx.textAlign = 'center';
-      let label: string;
-      if (deg === 180 || deg === 0) label = `${deg}°`;
-      else label = `${deg}°${aLon > 0 ? 'E' : 'W'}`;
-      ctx.fillText(label, x, H - P + 14);
-    }
-    for (let lat = -60; lat <= 60; lat += 30) {
-      const y = latToY(lat);
-      ctx.beginPath(); ctx.moveTo(P, y); ctx.lineTo(W - P, y); ctx.stroke();
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '9px system-ui'; ctx.textAlign = 'right';
-      ctx.fillText(`${Math.abs(lat)}°${lat >= 0 ? 'N' : 'S'}`, P - 4, y + 3);
-    }
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(P, latToY(0)); ctx.lineTo(W - P, latToY(0)); ctx.stroke();
-
-    // Continent outlines — all points converted to view-relative,
-    // antimeridian crossing detection uses view-relative deltas.
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 0.5;
-    for (const continent of CONTINENTS) {
-      for (const ring of continent.polygons) {
-        // --- Fill ---
-        ctx.beginPath();
-        let first = true;
-        for (const [lon, lat] of ring) {
-          const x = lonToX(viewLng(lon));
-          const y = latToY(lat);
-          if (first) { ctx.moveTo(x, y); first = false; }
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.fill();
-
-        // --- Stroke: break at seam crossings ---
-        ctx.beginPath();
-        first = true;
-        for (let i = 0; i < ring.length; i++) {
-          const vLon = viewLng(ring[i][0]);
-          const lat = ring[i][1];
-          const x = lonToX(vLon);
-          const y = latToY(lat);
-          if (first) { ctx.moveTo(x, y); first = false; continue; }
-          const prevVLon = viewLng(ring[i - 1][0]);
-          if (Math.abs(vLon - prevVLon) > 180) {
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+    if (clamped <= -1) {
+      // Full coverage at this latitude — entire circle above threshold
+      const sr = sLng - 180, ss = sLng + 180;
+      const pieces = clip(sr, ss);
+      if (prevPieces && prevLat !== null) {
+        const usedCurr = new Set<number>();
+        for (const pp of prevPieces) {
+          let bestJ = -1, bestOverlap = 0;
+          for (let j = 0; j < pieces.length; j++) {
+            if (usedCurr.has(j)) continue;
+            const overlap = Math.min(pp[1], pieces[j][1]) - Math.max(pp[0], pieces[j][0]);
+            if (overlap > bestOverlap) { bestOverlap = overlap; bestJ = j; }
+          }
+          if (bestJ >= 0) {
+            usedCurr.add(bestJ);
+            strips.push([[pp[0], prevLat], [pieces[bestJ][0], lat], [pieces[bestJ][1], lat], [pp[1], prevLat]]);
           }
         }
-        ctx.closePath();
-        ctx.stroke();
+      }
+      prevLat = lat; prevPieces = pieces;
+      continue;
+    }
+
+    if (clamped >= 1) {
+      // No coverage at this latitude
+      prevLat = prevPieces = null;
+      continue;
+    }
+
+    const delta = (Math.acos(clamped) * 180) / Math.PI;
+    const sr = sLng - delta, ss = sLng + delta;
+    const pieces = clip(sr, ss);
+
+    if (prevPieces && prevLat !== null) {
+      const usedCurr = new Set<number>();
+      for (const pp of prevPieces) {
+        let bestJ = -1, bestOverlap = 0;
+        for (let j = 0; j < pieces.length; j++) {
+          if (usedCurr.has(j)) continue;
+          const overlap = Math.min(pp[1], pieces[j][1]) - Math.max(pp[0], pieces[j][0]);
+          if (overlap > bestOverlap) { bestOverlap = overlap; bestJ = j; }
+        }
+        if (bestJ >= 0) {
+          usedCurr.add(bestJ);
+          strips.push([[pp[0], prevLat], [pieces[bestJ][0], lat], [pieces[bestJ][1], lat], [pp[1], prevLat]]);
+        }
       }
     }
 
-    // Location markers
-    if (markers) {
-      for (const m of markers) {
-        const mx = lonToX(viewLng(m.lng));
-        const my = latToY(m.lat);
-        ctx.beginPath();
-        ctx.arc(mx, my, 4, 0, Math.PI * 2);
-        ctx.fillStyle = m.color;
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.fillStyle = m.color;
-        ctx.font = 'bold 9px system-ui';
-        ctx.textAlign = mx > W / 2 ? 'right' : 'left';
-        ctx.fillText(m.label, mx + (mx > W / 2 ? -6 : 6), my - 6);
+    prevLat = lat; prevPieces = pieces;
+  }
+
+  return strips;
+}
+
+// --------------- component ---------------
+
+export default function DaylightMap({ dayOfYear, utcHour, markers, centerLng }: Props) {
+  const cLng = centerLng ?? 0;
+
+  // ---- unwrap utcHour so the sun position anchor stays continuous -------
+  // utcHour is wrapped to [0,24). When the slider crosses midnight,
+  // utcHour snaps from ~23.9 to ~0.1, which breaks the unwrapping anchor.
+  // Track a continuous hour value that never wraps — used ONLY for sun calc.
+  const prevUtcHourRef = useRef(utcHour);
+  const utcHourOffsetRef = useRef(0);
+  const prev = prevUtcHourRef.current;
+  if (utcHour - prev > 12) {
+    utcHourOffsetRef.current -= 24;
+  } else if (prev - utcHour > 12) {
+    utcHourOffsetRef.current += 24;
+  }
+  prevUtcHourRef.current = utcHour;
+  const continuousUtcHour = utcHour + utcHourOffsetRef.current;
+
+  // ---- sun position (computed here so debug table can display it) ----
+  const year = new Date().getFullYear();
+  // date uses the wrapped utcHour (suncalc handles it fine)
+  const date = new Date(Date.UTC(year, 0, dayOfYear, Math.floor(utcHour), Math.round((utcHour % 1) * 60), 0));
+  const sub = getSubsolarPoint(date);
+  // Use continuousUtcHour as the unwrapping anchor so it never jumps
+  const sunApproxLng = (12 - continuousUtcHour) * 15;
+  const sunLng = sub.lng + Math.round((sunApproxLng - sub.lng) / 360) * 360;
+
+  const option = useMemo(() => {
+    // ---- compute strips for each elevation threshold ----
+    const twilightLevels = [
+      { elev: -18, color: 'rgba(251,191,36,0.07)', label: 'astro' },
+      { elev: -12, color: 'rgba(251,191,36,0.08)', label: 'nautical' },
+      { elev:  -6, color: 'rgba(251,191,36,0.09)', label: 'civil' },
+      { elev:   0, color: 'rgba(251,191,36,0.12)', label: 'day' },
+    ];
+
+    const layerStrips = twilightLevels.map((lvl) => {
+      const s = buildFillStrips(dayOfYear, utcHour, lvl.elev, 2);
+      const all: number[][][] = [];
+      for (const offset of [-360, 0, 360]) {
+        for (const strip of s) {
+          all.push(strip.map(([lng, lat]) => [lng + offset, lat]) as any);
+        }
       }
-    }
+      return all;
+    });
 
-    // Terminator — sweep view-relative longitudes left-to-right.
-    // The terminator equation uses absolute longitudes: lat = atan(-cos(lon_abs - subLon) / tan(dec))
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineCap = 'round';
+    const markerData = (markers ?? []).map((m) => ({
+      name: m.label,
+      value: [m.lng, m.lat],
+      itemStyle: { color: m.color },
+      label: { show: true, formatter: m.label, position: 'right' as const, color: m.color, fontSize: 10 },
+    }));
 
-    const absDec = Math.abs(dec);
-    if (absDec < 0.0001) {
-      for (const off of [-90, 90]) {
-        const x = lonToX(viewLng(subLon + off));
-        ctx.beginPath();
-        ctx.moveTo(x, P);
-        ctx.lineTo(x, H - P);
-        ctx.stroke();
-      }
-    } else {
-      ctx.beginPath();
-      let first = true;
-      for (let vLon = -180; vLon <= 180; vLon += 0.5) {
-        const absLon = absLng(vLon);
-        const dLonRad = (absLon - subLon) * Math.PI / 180;
-        const latRad = Math.atan(-Math.cos(dLonRad) / Math.tan(dec));
-        const lat = latRad * 180 / Math.PI;
-        const x = lonToX(vLon);
-        const y = Math.max(P, Math.min(H - P, latToY(lat)));
-        if (first) { ctx.moveTo(x, y); first = false; }
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-
-    // Subsolar point
-    const sx = lonToX(viewLng(subLon));
-    const sy = latToY(subLat);
-    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-    ctx.fillStyle = '#fbbf24'; ctx.fill();
-    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; ctx.stroke();
-
-    // Map border
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(P, P, W - 2 * P, H - 2 * P);
-
-    // Legend
-    ctx.fillStyle = '#e2e8f0'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText('☀ Day', P + 6, P + 18);
-    ctx.fillStyle = '#64748b'; ctx.fillText('☾ Night', W - P - 55, P + 18);
-
-    // Center label
-    if (centerLabel) {
-      ctx.fillStyle = '#f59e0b';
-      ctx.font = '10px system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText('⟐ ' + centerLabel, W / 2, P + 18);
-    }
-
-  }, [dayOfYear, utcHour, markers, centerKey]);
+    return {
+      backgroundColor: '#020617',
+      tooltip: { show: false },
+      geo: {
+        map: 'world',
+        roam: 'move',
+        center: [cLng, 0],
+        zoom: 3.0,
+        scaleLimit: { min: 1.0, max: 10 },
+        itemStyle: { areaColor: 'transparent', borderColor: '#64748b', borderWidth: 0.8 },
+        emphasis: { disabled: true },
+      },
+      series: [
+        // ---- twilight / daylight fill layers ----
+        ...layerStrips.map((allStrips, li) => ({
+          type: 'custom' as const,
+          coordinateSystem: 'geo' as const,
+          z: 1,
+          silent: true,
+          data: [0],
+          renderItem: ((strips: number[][][], color: string) =>
+            (_params: any, api: any) => {
+              const children: any[] = [];
+              for (const s of strips) {
+                const p0 = api.coord([s[0][0], s[0][1]]);
+                const p1 = api.coord([s[1][0], s[1][1]]);
+                const p2 = api.coord([s[2][0], s[2][1]]);
+                const p3 = api.coord([s[3][0], s[3][1]]);
+                if (!p0 || !p1 || !p2 || !p3) continue;
+                children.push({
+                  type: 'polygon',
+                  shape: { points: [p0, p1, p2, p3] },
+                  style: { fill: color, stroke: color, lineWidth: 0 },
+                });
+              }
+              if (children.length === 0) return null;
+              return { type: 'group', children };
+            })(allStrips, twilightLevels[li].color),
+        })),
+        // ---- subsolar point (3 copies so one is always visible) ----
+        {
+          type: 'scatter' as const,
+          coordinateSystem: 'geo' as const,
+          z: 4,
+          silent: true,
+          data: [-360, 0, 360].map((offset) => ({ name: 'Sun', value: [sunLng + offset, sub.lat] })),
+          symbolSize: 10,
+          symbol: 'circle',
+          itemStyle: { color: '#fbbf24', borderColor: '#fbbf24', borderWidth: 0 },
+          label: {
+            show: true,
+            position: 'right' as const,
+            color: '#fbbf24',
+            fontSize: 10,
+            formatter: 'Sun',
+            offset: [5, 0],
+          },
+        },
+        // ---- markers ----
+        ...(markerData.length > 0 ? [{
+          type: 'scatter' as const,
+          coordinateSystem: 'geo' as const,
+          data: markerData,
+          z: 5,
+          symbolSize: 8,
+          symbol: 'pin' as const,
+          silent: true,
+        }] : []),
+      ],
+    };
+  }, [dayOfYear, utcHour, markers, cLng]);
 
   return (
-    <div className="flex justify-center">
-      <canvas ref={canvasRef} width={W} height={H} style={{ width: W, height: H }} className="max-w-full" />
+    <div className="w-full">
+      <ReactECharts option={option} theme="sungazerDark" style={{ height: 400, width: '100%' }} notMerge />
     </div>
   );
 }

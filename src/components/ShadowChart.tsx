@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { Line } from 'react-chartjs-2';
-import type { TooltipItem, ChartDataset } from 'chart.js';
+import ReactECharts from 'echarts-for-react';
 import type { ChartLocation } from '../lib/types';
+import { labelStepFormatter } from '../lib/echartsUtils';
 
 interface Props {
   locations: ChartLocation[];
@@ -12,71 +12,45 @@ interface Props {
 export default function ShadowChart({ locations, labelStep = 20 }: Props) {
   const firstData = locations[0]?.data;
 
-  const chartData = useMemo(() => {
-    if (!firstData) return { labels: [], datasets: [] };
+  const option = useMemo(() => {
+    if (!firstData) return {};
     const labels = firstData.map((d) => d.label);
-    const datasets: ChartDataset<'line', (number | null)[]>[] = [];
 
-    locations.forEach((loc) => {
-      datasets.push({
-        label: `${loc.label} — Shadow Multiplier`,
+    return {
+      grid: { left: 56, right: 20, top: 40, bottom: 32 },
+      legend: { top: 0 },
+      tooltip: {
+        trigger: 'axis' as const,
+        valueFormatter: (v: number) => (v != null ? `${v.toFixed(2)}×` : '—'),
+      },
+      xAxis: {
+        type: 'category' as const,
+        data: labels,
+        axisLabel: { formatter: labelStepFormatter(labels, labelStep) },
+      },
+      yAxis: {
+        type: 'value' as const,
+        min: 0,
+        name: 'Shadow ÷ Height',
+        axisLabel: { formatter: (v: number) => `${v}×` },
+      },
+      series: locations.map((loc) => ({
+        name: `${loc.label} — Shadow`,
+        type: 'line' as const,
         data: loc.data.map((d) => {
           const elevRad = (d.maxElevation * Math.PI) / 180;
-          return elevRad > 0.01 ? 1 / Math.tan(elevRad) : 50; // cap for near-zero elevation
+          return elevRad > 0.01 ? 1 / Math.tan(elevRad) : 50;
         }),
-        borderColor: loc.color,
-        backgroundColor: loc.color + '20',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 2,
-      });
-    });
-
-    return { labels, datasets };
-  }, [locations]);
-
-  const options = useMemo(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: 'index' as const, intersect: false },
-    plugins: {
-      legend: {
-        position: 'top' as const,
-        labels: { usePointStyle: true, padding: 12, boxWidth: 8, font: { size: 11 } },
-      },
-      tooltip: {
-        callbacks: {
-          label: (ctx: TooltipItem<'line'>) => {
-            const v = ctx.parsed.y ?? 0;
-            return `${ctx.dataset.label}: ${v.toFixed(2)}× height`;
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        ticks: {
-          callback: (_val: unknown, idx: number) =>
-            idx % labelStep === 0 ? firstData?.[idx]?.label : '',
-          maxRotation: 0,
-        },
-        grid: { color: '#1e293b' },
-      },
-      y: {
-        min: 0,
-        title: { display: true, text: 'Shadow ÷ Height' },
-        ticks: { callback: (v: string | number) => `${Number(v)}×` },
-        grid: { color: '#1e293b' },
-      },
-    },
-  }), [firstData, labelStep]);
+        lineStyle: { color: loc.color, width: 2 },
+        itemStyle: { color: loc.color },
+        areaStyle: { color: loc.color + '20' },
+        smooth: 0.3,
+        symbol: 'none' as const,
+      })),
+    };
+  }, [locations, labelStep, firstData]);
 
   if (!firstData) return null;
 
-  return (
-    <div className="chart-container h-[350px]">
-      <Line data={chartData} options={options} />
-    </div>
-  );
+  return <ReactECharts option={option} theme="sungazerDark" style={{ height: 350 }} notMerge />;
 }

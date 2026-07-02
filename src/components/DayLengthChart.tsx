@@ -1,90 +1,21 @@
 import { useMemo } from 'react';
-import { Line } from 'react-chartjs-2';
-import type { TooltipItem, ChartDataset } from 'chart.js';
+import ReactECharts from 'echarts-for-react';
 import type { ChartLocation } from '../lib/types';
+import { labelStepFormatter } from '../lib/echartsUtils';
 
 interface Props {
   locations: ChartLocation[];
   labelStep?: number;
 }
 
-function alpha(color: string, a: number): string {
-  const hex = color.replace('#', '');
-  const r = parseInt(hex.substring(0, 2), 16);
-  const g = parseInt(hex.substring(2, 4), 16);
-  const b = parseInt(hex.substring(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
 export default function DayLengthChart({ locations, labelStep = 20 }: Props) {
   const firstData = locations[0]?.data;
 
-  const chartData = useMemo(() => {
-    if (!firstData) return { labels: [], datasets: [] };
+  const option = useMemo(() => {
+    if (!firstData) return {};
     const labels = firstData.map((d) => d.label);
 
-    const datasets: ChartDataset<'line', (number | null)[]>[] = [];
-
-    // One Day Length line per location
-    locations.forEach((loc) => {
-      datasets.push({
-        label: `${loc.label} — Day Length`,
-        data: loc.data.map((d) => d.dayLength),
-        borderColor: loc.color,
-        backgroundColor: alpha(loc.color, 0.12),
-        fill: { target: { value: 8 } },
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 2,
-        yAxisID: 'y',
-      });
-    });
-
-    // Sunrise + Sunset per location (dashed)
-    locations.forEach((loc) => {
-      datasets.push({
-        label: `${loc.label} — Sunrise`,
-        data: loc.data.map((d) => d.sunriseHour),
-        borderColor: loc.color,
-        fill: false,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 1.2,
-        borderDash: [4, 4],
-        yAxisID: 'yTime',
-      });
-      datasets.push({
-        label: `${loc.label} — Sunset`,
-        data: loc.data.map((d) => d.sunsetHour),
-        borderColor: loc.color,
-        fill: false,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 1.2,
-        borderDash: [2, 4],
-        yAxisID: 'yTime',
-      });
-    });
-
-    // Solar Noon — only for first location to avoid clutter
-    if (locations.length > 0) {
-      datasets.push({
-        label: `${locations[0].label} — Solar Noon`,
-        data: locations[0].data.map((d) => d.solarNoonHour),
-        borderColor: alpha(locations[0].color, 0.5),
-        fill: false,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 0.8,
-        borderDash: [2, 8],
-        yAxisID: 'yTime',
-      });
-    }
-
-    return { labels, datasets };
-  }, [locations]);
-
-  const options = useMemo(() => {
+    // Compute yTime range
     const timeVals: number[] = [];
     locations.forEach((loc) => {
       loc.data.forEach((d) => {
@@ -99,75 +30,112 @@ export default function DayLengthChart({ locations, labelStep = 20 }: Props) {
       ? Math.ceil(Math.max(24, Math.max(...finiteVals)) + 1)
       : 24;
 
+    const timeLabel = (v: number) => {
+      const h = Math.floor(v);
+      const m = Math.round((v - h) * 60);
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    const series: object[] = [];
+
+    // Day Length per location (left axis)
+    locations.forEach((loc) => {
+      series.push({
+        name: `${loc.label} — Day Length`,
+        type: 'line' as const,
+        data: loc.data.map((d) => d.dayLength),
+        lineStyle: { color: loc.color, width: 2 },
+        itemStyle: { color: loc.color },
+        areaStyle: { color: loc.color + '1f', origin: 8 },
+        smooth: 0.3,
+        symbol: 'none' as const,
+        yAxisIndex: 0,
+      });
+    });
+
+    // Sunrise + Sunset per location (right axis, dashed)
+    locations.forEach((loc) => {
+      series.push({
+        name: `${loc.label} — Sunrise`,
+        type: 'line' as const,
+        data: loc.data.map((d) => d.sunriseHour),
+        lineStyle: { color: loc.color, width: 1.2, type: 'dashed' as const },
+        itemStyle: { color: loc.color },
+        smooth: 0.3,
+        symbol: 'none' as const,
+        yAxisIndex: 1,
+      });
+      series.push({
+        name: `${loc.label} — Sunset`,
+        type: 'line' as const,
+        data: loc.data.map((d) => d.sunsetHour),
+        lineStyle: { color: loc.color, width: 1.2, type: 'dotted' as const },
+        itemStyle: { color: loc.color },
+        smooth: 0.3,
+        symbol: 'none' as const,
+        yAxisIndex: 1,
+      });
+    });
+
+    // Solar Noon — first location only (right axis)
+    if (locations.length > 0) {
+      series.push({
+        name: `${locations[0].label} — Solar Noon`,
+        type: 'line' as const,
+        data: locations[0].data.map((d) => d.solarNoonHour),
+        lineStyle: { color: locations[0].color + '80', width: 0.8, type: 'dashed' as const },
+        itemStyle: { color: locations[0].color + '80' },
+        smooth: 0.3,
+        symbol: 'none' as const,
+        yAxisIndex: 1,
+      });
+    }
+
     return {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index' as const, intersect: false },
-      plugins: {
-        legend: {
-          position: 'top' as const,
-          labels: { usePointStyle: true, padding: 12, boxWidth: 8, font: { size: 11 } },
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx: TooltipItem<'line'>) => {
-              const lbl = ctx.dataset.label || '';
-              const y = ctx.parsed.y ?? 0;
-              if (lbl.includes('Day Length')) {
-                const h = Math.floor(y);
-                const m = Math.round((y - h) * 60);
-                return `${lbl}: ${h}h ${m}m`;
+      grid: { left: 48, right: 56, top: 40, bottom: 32 },
+      legend: { top: 0 },
+      tooltip: {
+        trigger: 'axis' as const,
+        formatter: (params: any) => {
+          if (!Array.isArray(params)) return '';
+          return params
+            .map((p: any) => {
+              const v = p.data;
+              if (v == null) return `${p.seriesName}: —`;
+              const name = p.seriesName || '';
+              if (name.includes('Day Length')) {
+                const h = Math.floor(v);
+                const m = Math.round((v - h) * 60);
+                return `${name}: ${h}h ${m}m`;
               }
-              const h = Math.floor(y);
-              const m = Math.round((y - h) * 60);
-              return `${lbl}: ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-            },
-          },
+              return `${name}: ${timeLabel(v)}`;
+            })
+            .join('<br/>');
         },
       },
-      scales: {
-        x: {
-          ticks: {
-            callback: (_val: unknown, idx: number) =>
-              idx % labelStep === 0 ? firstData?.[idx]?.label : '',
-            maxRotation: 0,
-          },
-          grid: { color: '#1e293b' },
-        },
-        y: {
-          type: 'linear' as const,
-          position: 'left' as const,
-          title: { display: true, text: 'Hours' },
-          min: 8,
-          max: 18,
-          ticks: { callback: (v: string | number) => `${Number(v)}h` },
-          grid: { color: '#1e293b' },
-        },
-        yTime: {
-          type: 'linear' as const,
-          position: 'right' as const,
-          title: { display: true, text: 'Time of Day' },
-          min: yTimeMin,
-          max: yTimeMax,
-          ticks: {
-            callback: (v: string | number) => {
-              const n = Number(v);
-              const h = Math.floor(n);
-              const m = Math.round((n - h) * 60);
-              return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-            },
-          },
-          grid: { drawOnChartArea: false },
-        },
+      xAxis: {
+        type: 'category' as const,
+        data: labels,
+        axisLabel: { formatter: labelStepFormatter(labels, labelStep) },
       },
+      yAxis: [{
+        type: 'value' as const,
+        min: 8,
+        max: 18,
+        name: 'Hours',
+        axisLabel: { formatter: (v: number) => `${v}h` },
+      }, {
+        type: 'value' as const,
+        min: yTimeMin,
+        max: yTimeMax,
+        name: 'Time of Day',
+        axisLabel: { formatter: timeLabel },
+      }],
+      series,
     };
   }, [locations, labelStep, firstData]);
 
   if (!firstData) return null;
 
-  return (
-    <div className="chart-container h-[400px]">
-      <Line data={chartData} options={options} />
-    </div>
-  );
+  return <ReactECharts option={option} theme="sungazerDark" style={{ height: 400 }} notMerge />;
 }

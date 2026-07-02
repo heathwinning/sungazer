@@ -13,12 +13,32 @@ import SEOHead from './components/SEOHead';
 import { computeYearlySunData, getHourlyPositions, getElevationAtTime } from './lib/sunCalc';
 import { guessLocation } from './lib/geoGuess';
 import type { LocationConfig, ChartLocation } from './lib/types';
-import './lib/chartConfig';
+import './lib/echartsTheme';
 
 type ElevationMode = 'max' | 'atTime';
 type ZenithMode = 'smooth' | 'mirror';
 
 const CURRENT_YEAR = new Date().getFullYear();
+
+// Defaults derived from current date/time for first-visit slider values.
+function computeCurrentDefaults(mapTz: string) {
+  const now = new Date();
+  const startOfYear = Date.UTC(now.getUTCFullYear(), 0, 0);
+  const doy = Math.floor((now.getTime() - startOfYear) / 86400000);
+
+  let localHour = now.getUTCHours() + now.getUTCMinutes() / 60;
+  try {
+    const dt = DateTime.now().setZone(mapTz);
+    if (dt.isValid) {
+      localHour = dt.hour + dt.minute / 60;
+    }
+  } catch { /* keep UTC fallback */ }
+
+  return {
+    doy: Math.max(1, Math.min(365, doy)),
+    localHour,
+  };
+}
 
 const PALETTE = [
   '#f59e0b', '#22d3ee', '#a78bfa', '#f97316',
@@ -37,6 +57,9 @@ interface SavedState {
   elevationMode: ElevationMode;
   zenithMode: ZenithMode;
   mapTz?: string;
+  polarDay?: number;
+  mapDay?: number;
+  mapLocalHour?: number;
 }
 
 function loadState(): SavedState | null {
@@ -88,20 +111,27 @@ const FALLBACK_LOCATIONS: LocationConfig[] = [randomFallback()];
 
 export default function App() {
   const saved = loadState();
+
+  // Compute default day-of-year & local hour from current time, using the
+  // initial map timezone so the Daylight Map shows the correct "now".
+  const initialMapTz =
+    saved?.mapTz ?? (saved?.locations?.[0]?.tz || FALLBACK_LOCATIONS[0]?.tz || 'UTC');
+  const currentDefaults = computeCurrentDefaults(initialMapTz);
+
   const [locations, setLocations] = useState<LocationConfig[]>(
     saved?.locations ?? FALLBACK_LOCATIONS,
   );
-  const [targetHour, setTargetHour] = useState(saved?.targetHour ?? 12);
+  const [targetHour, setTargetHour] = useState(saved?.targetHour ?? currentDefaults.localHour);
   const [elevationMode, setElevationMode] = useState<ElevationMode>(saved?.elevationMode ?? 'max');
   const [zenithMode, setZenithMode] = useState<ZenithMode>(saved?.zenithMode ?? 'smooth');
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [polarDay, setPolarDay] = useState(172); // ~summer solstice
+  const [polarDay, setPolarDay] = useState(saved?.polarDay ?? currentDefaults.doy);
   const [polarAnnual, setPolarAnnual] = useState(false);
-  const [mapDay, setMapDay] = useState(172);
-  const [mapLocalHour, setMapLocalHour] = useState(12);
-  const [mapTz, setMapTz] = useState<string>(
-    saved?.mapTz ?? (saved?.locations?.[0]?.tz || FALLBACK_LOCATIONS[0]?.tz || 'UTC'),
+  const [mapDay, setMapDay] = useState(saved?.mapDay ?? currentDefaults.doy);
+  const [mapLocalHour, setMapLocalHour] = useState(
+    Math.round(saved?.mapLocalHour ?? currentDefaults.localHour),
   );
+  const [mapTz, setMapTz] = useState<string>(initialMapTz);
   const mapTzManualRef = useRef(false); // true only when user explicitly picks a TZ this session
   const dstCheckboxRef = useRef<HTMLInputElement>(null);
   const [mapCenterIdx, setMapCenterIdx] = useState(-1); // -1 = default, 0+ = location index
@@ -118,8 +148,8 @@ export default function App() {
 
   // Persist settings to localStorage on every change
   useEffect(() => {
-    saveState({ locations, targetHour, elevationMode, zenithMode, mapTz });
-  }, [locations, targetHour, elevationMode, zenithMode, mapTz]);
+    saveState({ locations, targetHour, elevationMode, zenithMode, mapTz, polarDay, mapDay, mapLocalHour });
+  }, [locations, targetHour, elevationMode, zenithMode, mapTz, polarDay, mapDay, mapLocalHour]);
 
   // Geo-guess only on very first visit (no saved data, not already guessed)
   useEffect(() => {
@@ -683,8 +713,10 @@ export default function App() {
               <span className="text-xs text-slate-500">
                 {(() => {
                   const d = new Date(Date.UTC(CURRENT_YEAR, 0, mapDay, computedUtcHour, 0));
+                  const hh = String(Math.floor(mapLocalHour)).padStart(2, '0');
+                  const mm = String(Math.round((mapLocalHour % 1) * 60)).padStart(2, '0');
                   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) +
-                    ' ' + String(mapLocalHour).padStart(2, '0') + ':00 ' +
+                    ' ' + hh + ':' + mm + ' ' +
                     mapTz.replace('_', ' ').replace(/^.*\//, '') +
                     ' (= ' + String(Math.round(computedUtcHour)).padStart(2, '0') + ':00 UTC)';
                 })()}
@@ -692,7 +724,6 @@ export default function App() {
             </div>
             <DaylightMap dayOfYear={mapDay} utcHour={computedUtcHour}
               centerLng={mapCenter.lng}
-              centerLabel={mapCenter.label}
               markers={mapMarkers}
             />
           </section>

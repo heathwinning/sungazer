@@ -10,10 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "chart.js": "^4.5.1",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "leaflet": "^1.9.4",
     "luxon": "^3.7.2",
     "react": "^19.2.7",
-    "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.7",
     "react-helmet-async": "^3.0.0",
     "suncalc": "^2.0.0",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
+    "@types/leaflet": "^1.9.21",
     "@types/luxon": "^3.7.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",

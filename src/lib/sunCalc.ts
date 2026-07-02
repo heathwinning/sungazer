@@ -46,7 +46,7 @@ export function getSubsolarPoint(date: Date): SubsolarPoint {
     date.getUTCHours() +
     date.getUTCMinutes() / 60 +
     date.getUTCSeconds() / 3600;
-  let subLng = ((utcHour - 12) * 15 + eotHours * 15 + 540) % 360 - 180;
+  let subLng = ((12 - utcHour) * 15 + eotHours * 15 + 540) % 360 - 180;
 
   return { lat: dec, lng: subLng };
 }
